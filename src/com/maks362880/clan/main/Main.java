@@ -1,4 +1,3 @@
-import enums.UserTransactionsReasons;
 
 import java.util.Scanner;
 
@@ -19,7 +18,7 @@ public class Main {
         long taskId = scanner.nextLong();
 
         // Пример использования
-        clanGoldManagement.addGoldToClan(userId, clanId, gold, UserTransactionsReasons.USER_CONTRIBUTION);
+        clanGoldManagement.addGoldToClan(userId, clanId, gold);
         clanGoldManagement.completeTask(userId,clanId, taskId);
     }
 }
