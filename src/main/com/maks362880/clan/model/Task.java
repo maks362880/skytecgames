@@ -1,3 +1,5 @@
+package com.maks362880.clan.model;
+
 import java.util.Objects;
 
 public class Task {
@@ -5,8 +7,10 @@ public class Task {
     private String name;
     private int reward;
 
-    public Task(long id, String name, int reward) {
-        this.id = id;
+    public Task() {
+    }
+
+    public Task(String name, int reward) {
         this.name = name;
         this.reward = reward;
     }
@@ -15,12 +19,24 @@ public class Task {
         return id;
     }
 
+    public void setId(long id) {
+        this.id = id;
+    }
+
     public String getName() {
         return name;
     }
 
+    public void setName(String name) {
+        this.name = name;
+    }
+
     public int getReward() {
         return reward;
+    }
+
+    public void setReward(int reward) {
+        this.reward = reward;
     }
 
     @Override

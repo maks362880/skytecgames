@@ -1,9 +1,19 @@
+package com.maks362880.clan.model;
+
 import java.util.Objects;
 
 public class Clan {
     private long id;
     private String name;
     private int gold;
+
+    public Clan() {
+    }
+
+    public Clan(String name, int gold) {
+        this.name = name;
+        this.gold = gold;
+    }
 
     // Геттеры и сеттеры
 
