@@ -1,13 +1,13 @@
 package com.maks362880.clan.service;
 
+import com.maks362880.clan.dbhelper.ConnectionHelper;
 import com.maks362880.clan.model.Clan;
 import com.maks362880.clan.model.Task;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CompletableFuture;
 
 
 public class ClanGoldManagement {
@@ -25,190 +25,169 @@ public class ClanGoldManagement {
     private static final String SELECT_TASK_QUERY = "SELECT * FROM task WHERE id = ?";
     private static final Logger logger = LoggerFactory.getLogger(ClanGoldManagement.class);
 
-    private final ExecutorService executorService;
-    private Connection connection;
-
+    private final Connection connection;
 
     public ClanGoldManagement() {
-        executorService = Executors.newFixedThreadPool(100);
-
-        try {
-            connection = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
-            connection.createStatement().execute(CREATE_CLAN_TABLE_QUERY);
-            connection.createStatement().execute(CREATE_USER_TABLE_QUERY);
-            connection.createStatement().execute(CREATE_TASKS_TABLE_QUERY);
-
-            //connection.commit();
-        } catch (SQLException e) {
-            logger.error(e.getMessage());
-            e.printStackTrace();
-        }
+        this.connection = ConnectionHelper.getConnection();
     }
 
-    public void transferGoldFromUserToClan(Connection connection, long userId, long clanId, int gold) {
-        //executorService.execute(() -> {
-        //Формируем точу отката, она в будущем поможет уменьшить количество фантомных ошибок
-        // т.к. б.д. h2 у нас на уровне изоляции read commit
-        Savepoint rollbackPoint = null;
-        // try (Connection connection = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD)) {
-        try {
-            connection.setAutoCommit(false);
-            // rollbackPoint = connection.setSavepoint();
+    public CompletableFuture<Void> transferGoldFromUserToClan(long userId, long clanId, int gold) {
+        return CompletableFuture.runAsync(() -> {
+             try {
+                // Формируем точку отката только для текущего потока
+                Savepoint rollbackPoint = null;
 
-            // Проверяем, достаточно ли золота у пользователя
-            int userGoldAmount = getUserGoldAmount(connection, userId);
-            if (userGoldAmount < gold) {
-                String message = "У пользователя недостаточно золота.";
-                logger.debug("{} ID '{}'", message, userId);
-                return;
-            }
+                try {
+                    // Проверяем, достаточно ли золота у пользователя
+                    int userGoldAmount = getUserGoldAmount(userId);
+                    if (userGoldAmount < gold) {
+                        String message = "У пользователя недостаточно золота.";
+                        logger.debug("{} ID '{}'", message, userId);
+                        return;
+                    }
 
-            // Проверяем существование пользователя и клана
-            if (!userExists(connection, userId) || !clanExists(connection, clanId)) {
-                String message = "Пользователь или клан не существуют.";
-                logger.debug(message);
-                return;
-            }
+                    // Проверяем существование пользователя и клана
+                    if (!userExists(userId) || !clanExists(clanId)) {
+                        String message = "Пользователь или клан не существуют.";
+                        logger.debug(message);
+                        return;
+                    }
 
-            // Обновляем золото пользователя и золото клана
-            int newUserGoldAmount = userGoldAmount - gold;
-            updateUserGoldAmount(connection, userId, newUserGoldAmount);
-            int oldClanGold = getClanGold(connection, clanId);
-            int newClanGold = oldClanGold + gold;
-            updateClanGold(connection, clanId, newClanGold);
+                    // Устанавливаем сохранную точку только для текущего потока
+                    rollbackPoint = connection.setSavepoint();
 
-            String message = String.format("Золото успешно добавлено в казну клана. Клан: '%s'," +
-                            " Пользователь: '%d', Добавленное золото: '%d', Текущее количество золота в казне: '%d' Предыдущее количество золота в казне: '%d'",
-                    getClanName(connection, clanId), userId, gold, newClanGold, oldClanGold);
-            logger.debug(message);
+                    // Обновляем золото пользователя и золото клана
+                    int newUserGoldAmount = userGoldAmount - gold;
+                    updateUserGoldAmount(userId, newUserGoldAmount);
+                    int oldClanGold = getClanGold(clanId);
+                    int newClanGold = oldClanGold + gold;
+                    updateClanGold(clanId, newClanGold);
 
-            connection.commit();
-        } catch (SQLException e) {
-            try {
-                connection.rollback(rollbackPoint);
-            } catch (SQLException ex) {
-                logger.error("Ошибка при откате транзакции: {}", ex.getMessage());
-            }
-            logger.error("Ошибка при добавлении золота в казну клана: {}", e.getMessage());
-        }
-        //  });
-    }
+                    String message = String.format("Золото успешно добавлено в казну клана. Клан: '%s'," +
+                                    " Пользователь: '%d', Добавленное золото: '%d', Текущее количество золота в казне: '%d' Предыдущее количество золота в казне: '%d'",
+                            getClanName(clanId), userId, gold, newClanGold, oldClanGold);
+                    logger.debug(message);
 
-    public void transferGoldFromUserTaskToClan(Connection connection, long userId, long clanId, long taskId) {
-        //  executorService.execute(() -> {
-        //   try (Connection connection = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD)) {
-        try {
-            connection.setAutoCommit(false);
-            // Создаем savepoint для возможной отмены изменений
-            //  Savepoint rollbackPoint = connection.setSavepoint();
-
-            Clan clan = getClan(connection, clanId);
-            if (clan == null) {
-                String message = String.format("Клан с идентификатором '%d' не найден.", clanId);
-                System.out.println(message);
-                String logMessage = String.format("%s Идентификатор пользователя: '%d'", message, userId);
-                logger.debug(logMessage);
-                // Откатываем изменения до savepoint, чтобы отменить частично выполненные изменения
-                //  connection.rollback(rollbackPoint);
-                return;
-            }
-
-            Task task = getTask(connection, taskId);
-            if (task == null) {
-                String message = String.format("Задача с идентификатором '%d' не найдена.", taskId);
-                System.out.println(message);
-                String logMessage = String.format("%s Идентификатор пользователя: '%d'", message, userId);
-                logger.debug(logMessage);
-                // Откатываем изменения до savepoint, чтобы отменить частично выполненные изменения
-                //   connection.rollback(rollbackPoint);
-                return;
-            }
-            int reward = task.getReward();
-            int oldGold = clan.getGold();
-            int newGold = oldGold + reward;
-            // Добавление золота казне клана
-
-            try {
-                updateClanGold(connection, clanId, newGold);
-            } catch (SQLException e) {
-                //   connection.rollback(rollbackPoint);
-                throw e;
-            }
-
-            String message = String.format("Задание успешно выполнено. Пользователь: '%d'," +
-                            " Задание: '%s', Награда: '%d', Клан: '%d', Текущее количество золота в казне клана: '%d'",
-                    userId, task.getName(), reward, clanId, newGold);
-            String logMessage = String.format("%s, Предыдущее количество золота в казне: '%d'", message, oldGold);
-            logger.debug(logMessage);
-            connection.commit(); // Подтверждаем транзакцию
-        } catch (SQLException e) {
-            try {
-                if (connection != null) {
-                    connection.rollback();
+                    connection.commit(); // Подтверждаем транзакцию только после успешного выполнения задачи
+                } catch (SQLException e) {
+                    if (rollbackPoint != null) {
+                        connection.rollback(rollbackPoint); // Откатываем изменения только для текущего потока
+                    }
+                    logger.error("Ошибка при добавлении золота в казну клана: {}", e.getMessage());
+                } finally {
+                    connection.releaseSavepoint(rollbackPoint); // Освобождаем используемую точку отката
                 }
-            } catch (SQLException ex) {
-                logger.error(e.getMessage());
-                ex.printStackTrace();
+            } catch (SQLException e) {
+                logger.error("Ошибка при получении соединения с базой данных: {}", e.getMessage());
             }
-            logger.error(e.getMessage());
-            e.printStackTrace();
-        }
-        // });
+        });
+    }
+
+    public CompletableFuture<Void> transferGoldFromUserTaskToClan(long userId, long clanId, long taskId) {
+        return CompletableFuture.runAsync(() -> {
+            try {
+                connection.setAutoCommit(false);
+                Savepoint rollbackPoint = connection.setSavepoint();
+
+                Clan clan = getClan(clanId);
+                if (clan == null) {
+                    connection.rollback(rollbackPoint);
+                    String message = String.format("Клан с идентификатором '%d' не найден.", clanId);
+                    System.out.println(message);
+                    String logMessage = String.format("%s Идентификатор пользователя: '%d'", message, userId);
+                    logger.debug(logMessage);
+                    return;
+                }
+
+                Task task = getTask(taskId);
+                if (task == null) {
+                    // Откатываем изменения до savepoint, чтобы отменить частично выполненные изменения
+                    connection.rollback(rollbackPoint);
+                    String message = String.format("Задача с идентификатором '%d' не найдена.", taskId);
+                    System.out.println(message);
+                    String logMessage = String.format("%s Идентификатор пользователя: '%d'", message, userId);
+                    logger.debug(logMessage);
+
+                    return;
+                }
+                int reward = task.getReward();
+                int oldGold = clan.getGold();
+                int newGold = oldGold + reward;
+                // Добавление золота казне клана
+
+                try {
+                    updateClanGold(clanId, newGold);
+                } catch (SQLException e) {
+                    connection.rollback(rollbackPoint);
+                    throw e;
+                }
+
+                String message = String.format("Задание успешно выполнено. Пользователь: '%d'," +
+                                " Задание: '%s', Награда: '%d', Клан: '%d', Текущее количество золота в казне клана: '%d'",
+                        userId, task.getName(), reward, clanId, newGold);
+                String logMessage = String.format("%s, Предыдущее количество золота в казне: '%d'", message, oldGold);
+                logger.debug(logMessage);
+                connection.commit();
+            } catch (SQLException e) {
+                logger.error("Ошибка при выполнении задачи: {}", e.getMessage());
+            }
+        });
     }
 
 
-    public void transferGoldFromClanToClan(Connection connection, long sourceClanId, long targetClanId, int amount) {
-        //   executorService.execute(() -> {
-        try {
-            // Получение текущего золота источникового и целевого кланов из базы данных
-            PreparedStatement getSourceClanGoldStatement = connection.prepareStatement(SELECT_CLAN_QUERY);
-            getSourceClanGoldStatement.setLong(1, sourceClanId);
-            ResultSet sourceClanGoldResult = getSourceClanGoldStatement.executeQuery();
-            int sourceClanGold = 0;
-            if (sourceClanGoldResult.next()) {
-                sourceClanGold = sourceClanGoldResult.getInt("gold");
+    public CompletableFuture<Void> transferGoldFromClanToClan(long sourceClanId, long targetClanId, int amount) {
+        return CompletableFuture.runAsync(() -> {
+             try {
+                // Получение текущего золота источникового и целевого кланов из базы данных
+                PreparedStatement getSourceClanGoldStatement = connection.prepareStatement(SELECT_CLAN_QUERY);
+                getSourceClanGoldStatement.setLong(1, sourceClanId);
+                ResultSet sourceClanGoldResult = getSourceClanGoldStatement.executeQuery();
+                int sourceClanGold = 0;
+                if (sourceClanGoldResult.next()) {
+                    sourceClanGold = sourceClanGoldResult.getInt("gold");
+                }
+                getSourceClanGoldStatement.close();
+
+                PreparedStatement getTargetClanGoldStatement = connection.prepareStatement(SELECT_CLAN_QUERY);
+                getTargetClanGoldStatement.setLong(1, targetClanId);
+                ResultSet targetClanGoldResult = getTargetClanGoldStatement.executeQuery();
+                int targetClanGold = 0;
+                if (targetClanGoldResult.next()) {
+                    targetClanGold = targetClanGoldResult.getInt("gold");
+                }
+                getTargetClanGoldStatement.close();
+
+                // Проверка достаточности золота у источникового клана
+                if (sourceClanGold >= amount) {
+                    // Обновление золота источникового и целевого кланов в базе данных
+                    PreparedStatement updateSourceClanGoldStatement = connection.prepareStatement(UPDATE_CLAN_GOLD_QUERY);
+                    updateSourceClanGoldStatement.setInt(1, sourceClanGold - amount);
+                    updateSourceClanGoldStatement.setLong(2, sourceClanId);
+                    updateSourceClanGoldStatement.executeUpdate();
+                    updateSourceClanGoldStatement.close();
+
+                    PreparedStatement updateTargetClanGoldStatement = connection.prepareStatement(UPDATE_CLAN_GOLD_QUERY);
+                    updateTargetClanGoldStatement.setInt(1, targetClanGold + amount);
+                    updateTargetClanGoldStatement.setLong(2, targetClanId);
+                    updateTargetClanGoldStatement.executeUpdate();
+                    updateTargetClanGoldStatement.close();
+
+                    logger.info("Успешная передача {} золота от клана {} к клану {}. Текущий баланс {}. Предыдущее количество золота в клане {}",
+                            amount, sourceClanId, targetClanId, targetClanGold + amount, targetClanGold);
+                } else {
+                    logger.warn("Недостаточно золота. Передающий золото клан  {} имеет только {} золота",
+                            sourceClanId, sourceClanGold);
+                }
+                // Автоматически подтверждаем транзакцию
+                connection.setAutoCommit(true);
+            } catch (SQLException e) {
+                logger.error("Error occurred while transferring gold from clan to clan", e);
             }
-            // getSourceClanGoldStatement.close();
-
-            PreparedStatement getTargetClanGoldStatement = connection.prepareStatement(SELECT_CLAN_QUERY);
-            getTargetClanGoldStatement.setLong(1, targetClanId);
-            ResultSet targetClanGoldResult = getTargetClanGoldStatement.executeQuery();
-            int targetClanGold = 0;
-            if (targetClanGoldResult.next()) {
-                targetClanGold = targetClanGoldResult.getInt("gold");
-            }
-            // getTargetClanGoldStatement.close();
-
-            // Проверка достаточности золота у источникового клана
-            if (sourceClanGold >= amount) {
-                // Обновление золота источникового и целевого кланов в базе данных
-                PreparedStatement updateSourceClanGoldStatement = connection.prepareStatement(UPDATE_CLAN_GOLD_QUERY);
-                updateSourceClanGoldStatement.setInt(1, sourceClanGold - amount);
-                updateSourceClanGoldStatement.setLong(2, sourceClanId);
-                updateSourceClanGoldStatement.executeUpdate();
-                updateSourceClanGoldStatement.close();
-
-                PreparedStatement updateTargetClanGoldStatement = connection.prepareStatement(UPDATE_CLAN_GOLD_QUERY);
-                updateTargetClanGoldStatement.setInt(1, targetClanGold + amount);
-                updateTargetClanGoldStatement.setLong(2, targetClanId);
-                updateTargetClanGoldStatement.executeUpdate();
-                updateTargetClanGoldStatement.close();
-
-                logger.info("Успешная передача {} золота от клана {} к клану {}. Текущий баланс {}. Предыдущее количество золота в клане {}",
-                        amount, sourceClanId, targetClanId, targetClanGold + amount, targetClanGold);
-            } else {
-                logger.warn("Недостаточно золота. Передающий золото клан  {} имеет только {} золота",
-                        sourceClanId, sourceClanGold);
-            }
-            connection.commit(); // Подтверждаем транзакцию
-        } catch (SQLException e) {
-            logger.error("Error occurred while transferring gold from clan to clan", e);
-        }
-        //  });
+        });
     }
 
 
-    private Task getTask(Connection connection, long taskId) {
+    private Task getTask(long taskId) {
         try (PreparedStatement statement = connection.prepareStatement(SELECT_TASK_QUERY)) {
             statement.setLong(1, taskId);
             ResultSet resultSet = statement.executeQuery();
@@ -229,14 +208,14 @@ public class ClanGoldManagement {
         return null;
     }
 
-    private void updateUserGold(Connection connection, long userId, int newGold) throws SQLException {
+    private void updateUserGold(long userId, int newGold) throws SQLException {
         PreparedStatement preparedStatement = connection.prepareStatement(UPDATE_USER_GOLD_QUERY);
         preparedStatement.setInt(1, newGold);
         preparedStatement.setLong(2, userId);
         preparedStatement.executeUpdate();
     }
 
-    private Clan getClan(Connection connection, long clanId) throws SQLException {
+    private Clan getClan(long clanId) throws SQLException {
         try (PreparedStatement preparedStatement = connection.prepareStatement(SELECT_CLAN_QUERY)) {
             preparedStatement.setLong(1, clanId);
             ResultSet resultSet = preparedStatement.executeQuery();
@@ -255,7 +234,7 @@ public class ClanGoldManagement {
 
     }
 
-    public int getUserGoldAmount(Connection connection, long userId) throws SQLException {
+    public int getUserGoldAmount(long userId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(SELECT_USER_GOLD_QUERY)) {
             statement.setLong(1, userId);
             try (ResultSet result = statement.executeQuery()) {
@@ -267,7 +246,7 @@ public class ClanGoldManagement {
         return 0;
     }
 
-    private void updateUserGoldAmount(Connection connection, long userId, int newGoldAmount) throws SQLException {
+    private void updateUserGoldAmount(long userId, int newGoldAmount) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(UPDATE_USER_GOLD_QUERY)) {
             statement.setInt(1, newGoldAmount);
             statement.setLong(2, userId);
@@ -275,7 +254,7 @@ public class ClanGoldManagement {
         }
     }
 
-    private boolean userExists(Connection connection, long userId) throws SQLException {
+    private boolean userExists(long userId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(SELECT_USER_QUERY)) {
             statement.setLong(1, userId);
             try (ResultSet result = statement.executeQuery()) {
@@ -284,7 +263,7 @@ public class ClanGoldManagement {
         }
     }
 
-    private boolean clanExists(Connection connection, long clanId) throws SQLException {
+    private boolean clanExists(long clanId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(SELECT_CLAN_QUERY)) {
             statement.setLong(1, clanId);
             try (ResultSet result = statement.executeQuery()) {
@@ -293,7 +272,7 @@ public class ClanGoldManagement {
         }
     }
 
-    private String getClanName(Connection connection, long clanId) throws SQLException {
+    private String getClanName(long clanId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(SELECT_CLAN_QUERY)) {
             statement.setLong(1, clanId);
             try (ResultSet result = statement.executeQuery()) {
@@ -305,7 +284,7 @@ public class ClanGoldManagement {
         return null;
     }
 
-    public int getClanGold(Connection connection, long clanId) throws SQLException {
+    public int getClanGold(long clanId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(SELECT_CLAN_QUERY)) {
             statement.setLong(1, clanId);
             try (ResultSet result = statement.executeQuery()) {
@@ -317,7 +296,7 @@ public class ClanGoldManagement {
         return 0;
     }
 
-    private void updateClanGold(Connection connection, long clanId, int goldAdded) throws SQLException {
+    private void updateClanGold(long clanId, int goldAdded) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(UPDATE_CLAN_GOLD_QUERY)) {
             statement.setInt(1, goldAdded);
             statement.setLong(2, clanId);
@@ -325,11 +304,4 @@ public class ClanGoldManagement {
         }
     }
 
-    public Connection getConnection() {
-        return connection;
-    }
-
-    public ExecutorService getExecutorService() {
-        return executorService;
-    }
 }
