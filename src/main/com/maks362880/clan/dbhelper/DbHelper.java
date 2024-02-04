@@ -7,8 +7,6 @@ import com.maks362880.clan.model.Users;
 import java.lang.reflect.Field;
 import java.sql.*;
 
-import static com.maks362880.clan.service.ClanGoldManagement.*;
-
 public class DbHelper {
     public static Clan clan1;
     public static Clan clan2;
@@ -18,23 +16,27 @@ public class DbHelper {
     public static Users users2;
     private static Connection connection;
 
+    public static final String CREATE_CLAN_TABLE_QUERY = "CREATE TABLE IF NOT EXISTS clan (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255), gold INT)";
+    public static final String CREATE_USER_TABLE_QUERY = "CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255), gold INT)";
+    public static final String CREATE_TASKS_TABLE_QUERY = "CREATE TABLE IF NOT EXISTS task (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255), reward INT)";
 
-    public static void init(){
-        connection = ConnectionHelper.getConnection();
+    public static void init(Connection connection) {
+        DbHelper.connection = connection;
         createEntities();
-        createTables(connection);
+        createTables(DbHelper.connection);
         fillData();
     }
-    public static void createEntities(){
-        clan1 = new Clan( "Clan 1", 10);
-        clan2 = new Clan( "Clan 2", 20);
-        task1 = new Task( "Task 1", 5);
-        task2 = new Task( "Task 2", 8);
-        users1 = new Users( "User 1", 15);
-        users2 = new Users( "User 2", 25);
+
+    public static void createEntities() {
+        clan1 = new Clan("Clan 1", 10);
+        clan2 = new Clan("Clan 2", 20);
+        task1 = new Task("Task 1", 5);
+        task2 = new Task("Task 2", 8);
+        users1 = new Users("User 1", 15);
+        users2 = new Users("User 2", 25);
     }
 
-    public static void createTables(Connection connection){
+    public static void createTables(Connection connection) {
         try (Statement statement = connection.createStatement()) {
             // Создание таблицы кланов
             statement.executeUpdate(CREATE_CLAN_TABLE_QUERY);
@@ -48,7 +50,7 @@ public class DbHelper {
         }
     }
 
-    public static void fillData(){
+    public static void fillData() {
         clan1.setId(insertData(connection, clan1));
         clan2.setId(insertData(connection, clan2));
         users1.setId(insertData(connection, users1));
@@ -57,7 +59,7 @@ public class DbHelper {
         task2.setId(insertData(connection, task2));
     }
 
-    public static  <T> int insertData(Connection connection, T data) {
+    public static <T> int insertData(Connection connection, T data) {
         try {
             Class<?> clazz = data.getClass();
             String tableName = clazz.getSimpleName().toLowerCase();
