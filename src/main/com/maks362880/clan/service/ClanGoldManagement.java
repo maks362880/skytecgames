@@ -18,7 +18,7 @@ import java.util.concurrent.CompletableFuture;
 public class ClanGoldManagement {
     private static final Logger logger = LoggerFactory.getLogger(ClanGoldManagement.class);
 
-    private ConnectionPool connectionPool;
+    private final ConnectionPool connectionPool;
 
     private final UserDao userDao;
     private final ClanDao clanDao;
