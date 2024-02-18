@@ -20,8 +20,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-
 public class ClanGoldManagementTest {
+
     private static Clan clan1;
     private static Clan clan2;
     private static Task task1;
@@ -29,6 +29,7 @@ public class ClanGoldManagementTest {
     private static Users users1;
     private static Users users2;
     private static ClanGoldManagement clanGoldManagement;
+
     static ConnectionPool connectionPool;
     static UserDao userDao;
     static ClanDao clanDao;
@@ -41,19 +42,18 @@ public class ClanGoldManagementTest {
         clanDao = new ClanDaoImpl();
         taskDao = new TaskDaoImpl();
         clanGoldManagement = new ClanGoldManagement(connectionPool, userDao, clanDao, taskDao);
-        Connection connection = connectionPool.getConnection();
-        DbHelper.init(connection);
-        try {
-            connection.close();
+
+        try (Connection connection = connectionPool.getConnection()) {
+            DbHelper.init(connection);
+            clan1 = DbHelper.clan1;
+            clan2 = DbHelper.clan2;
+            users1 = DbHelper.users1;
+            users2 = DbHelper.users2;
+            task1 = DbHelper.task1;
+            task2 = DbHelper.task2;
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
-        clan1 = DbHelper.clan1;
-        clan2 = DbHelper.clan2;
-        users1 = DbHelper.users1;
-        users2 = DbHelper.users2;
-        task1 = DbHelper.task1;
-        task2 = DbHelper.task2;
     }
 
     @Test
@@ -63,40 +63,34 @@ public class ClanGoldManagementTest {
 
         CompletableFuture<Void> transferFuture = clanGoldManagement.transferGoldFromUserToClan(users1.getId(), clan1.getId(), 10)
                 .thenRunAsync(() -> {
-                    try {
-                        Connection connection = connectionPool.getConnection();
+                    try (Connection connection = connectionPool.getConnection()) {
                         actualUserGoldAmount.set(userDao.getUserGoldAmount(connection, users1.getId()));
                         actualClanGold.set(clanDao.getClanGold(connection, clan1.getId()));
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
                 });
-        // Блокирующее ожидание завершения асинхронной задачи
+
         transferFuture.join();
         assertEquals(5, actualUserGoldAmount.get());
         assertEquals(20, actualClanGold.get());
     }
 
-
     @Test
     public void transferGoldFromTaskToClan() {
         AtomicInteger actualUserGoldAmount = new AtomicInteger();
         AtomicInteger actualClanGold = new AtomicInteger();
-        // Перевод золота с выполненной задачи пользователем к клану
-        CompletableFuture<Void> transferFuture =  clanGoldManagement.transferGoldFromUserTaskToClan(users2.getId(), clan2.getId(), task2.getId())
+
+        CompletableFuture<Void> transferFuture = clanGoldManagement.transferGoldFromUserTaskToClan(users2.getId(), clan2.getId(), task2.getId())
                 .thenRunAsync(() -> {
-                    try {
-                        Connection connection = connectionPool.getConnection();
-                        // Получение актуальной информации о золоте после перевода из базы данных
+                    try (Connection connection = connectionPool.getConnection()) {
                         actualUserGoldAmount.set(userDao.getUserGoldAmount(connection, users2.getId()));
                         actualClanGold.set(clanDao.getClanGold(connection, clan2.getId()));
-                        // Проверка результатов
-
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
                 });
-        // Блокирующее ожидание завершения асинхронной задачи
+
         transferFuture.join();
         assertEquals(25, actualUserGoldAmount.get());
         assertEquals(28, actualClanGold.get());
@@ -106,20 +100,17 @@ public class ClanGoldManagementTest {
     public void transferGoldBetweenClans() {
         AtomicInteger actualSourceClanGold = new AtomicInteger();
         AtomicInteger actualTargetClanGold = new AtomicInteger();
-        // Перевод золота между кланами
+
         CompletableFuture<Void> transferFuture = clanGoldManagement.transferGoldFromClanToClan(clan2.getId(), clan1.getId(), 9)
                 .thenRunAsync(() -> {
-                    try {
-                        Connection connection = connectionPool.getConnection();
-                        // Получение актуальной информации о золоте после перевода из базы данных
+                    try (Connection connection = connectionPool.getConnection()) {
                         actualSourceClanGold.set(clanDao.getClanGold(connection, clan2.getId()));
                         actualTargetClanGold.set(clanDao.getClanGold(connection, clan1.getId()));
-                        // Проверка результатов
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
                 });
-        // Блокирующее ожидание завершения асинхронной задачи
+
         transferFuture.join();
         assertEquals(11, actualSourceClanGold.get());
         assertEquals(19, actualTargetClanGold.get());
@@ -127,21 +118,13 @@ public class ClanGoldManagementTest {
 
     @AfterEach
     public void cleanup() {
-        Connection connection = connectionPool.getConnection();
-        try (Statement statement = connection.createStatement()) {
+        try (Connection connection = connectionPool.getConnection();
+             Statement statement = connection.createStatement()) {
             statement.executeUpdate("DROP TABLE IF EXISTS clan");
             statement.executeUpdate("DROP TABLE IF EXISTS users");
             statement.executeUpdate("DROP TABLE IF EXISTS task");
-            connection.close();
         } catch (SQLException e) {
             throw new RuntimeException(e);
-        } finally {
-            try {
-                connection.close();
-            } catch (SQLException ex) {
-                throw new RuntimeException(ex);
-            }
         }
     }
-
 }
